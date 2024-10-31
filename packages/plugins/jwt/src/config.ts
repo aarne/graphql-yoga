@@ -1,8 +1,18 @@
-import { type PromiseOrValue } from 'graphql-yoga';
-import { VerifyOptions } from 'jsonwebtoken';
+import { type PromiseOrValue, type YogaLogger } from 'graphql-yoga';
 import { extractFromHeader } from './utils.js';
 
 type AtleastOneItem<T> = [T, ...T[]];
+
+export interface JwtPayload {
+  [key: string]: unknown;
+  iss?: string | undefined;
+  sub?: string | undefined;
+  aud?: string | string[] | undefined;
+  exp?: number | undefined;
+  nbf?: number | undefined;
+  iat?: number | undefined;
+  jti?: string | undefined;
+}
 
 export type ExtractTokenFunction = (params: {
   request: Request;
@@ -10,20 +20,12 @@ export type ExtractTokenFunction = (params: {
   url: URL;
 }) => PromiseOrValue<undefined | { token: string; prefix?: string }>;
 
-export type GetSigningKeyFunction = (kid?: string) => Promise<string> | string;
+export type TokenVerificationFunction = (
+  token: string,
+  logger: YogaLogger,
+) => Promise<JwtPayload | undefined>;
 
 export type JwtPluginOptions = {
-  /**
-   * List of configurations for the signin-key providers. You can configure multiple signin-key providers to allow for key rotation, fallbacks, etc.
-   *
-   * In addition, you can use the `remote` variant and configure [`jwks-rsa`'s JWKS client](https://github.com/auth0/node-jwks-rsa/tree/master).
-   *
-   * The plugin will try to fetch the keys from the providers in the order they are defined in this array.
-   *
-   * If the first provider fails to fetch the keys, the plugin will try the next provider in the list.
-   *
-   */
-  singingKeyProviders: AtleastOneItem<GetSigningKeyFunction>;
   /**
    * List of locations to look for the token in the incoming request.
    *
@@ -40,13 +42,9 @@ export type JwtPluginOptions = {
    */
   tokenLookupLocations?: AtleastOneItem<ExtractTokenFunction>;
   /**
-   * List of token verification options (algorithms, issuer, audience), to be used to verify the token.
-   *
-   * For additional documentation, please refer to [`jsonwebtoken#VerifyOptions`](https://github.com/DefinitelyTyped/DefinitelyTyped/blob/master/types/jsonwebtoken/index.d.ts#L58-L77).
-   *
-   * By defualt, only the `RS256` and `HS256` algorithms are configured as validations.
+   * Token decode and verification function.
    */
-  tokenVerification?: VerifyOptions;
+  tokenVerificationFunction: TokenVerificationFunction;
   /**
    * Whether to reject requests/operations that does not meet criteria.
    *
@@ -77,12 +75,6 @@ export type JwtPluginOptions = {
 };
 
 export function normalizeConfig(input: JwtPluginOptions) {
-  if (input.singingKeyProviders.length === 0) {
-    throw new TypeError(
-      'You must provide at least one signing key provider. Please verify your `singingKeyProviders` configuration.',
-    );
-  }
-
   const extendContextFieldName: string | null =
     input.extendContext === false
       ? null
@@ -102,11 +94,8 @@ export function normalizeConfig(input: JwtPluginOptions) {
   }
 
   return {
-    singingKeyProviders: input.singingKeyProviders,
     tokenLookupLocations,
-    tokenVerification: input.tokenVerification ?? {
-      algorithms: ['RS256', 'HS256'],
-    },
+    tokenVerificationFunction: input.tokenVerificationFunction,
     reject: {
       missingToken: true,
       invalidToken: true,

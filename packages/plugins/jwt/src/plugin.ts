@@ -1,10 +1,9 @@
-import type { Plugin, YogaLogger } from 'graphql-yoga';
-import jsonwebtoken, { type Jwt, type JwtPayload, type VerifyOptions } from 'jsonwebtoken';
-import { type OnRequestParseEventPayload } from 'packages/graphql-yoga/src/plugins/types.js';
-import { normalizeConfig, type JwtPluginOptions } from './config.js';
 import '@whatwg-node/server-plugin-cookies';
 import { GraphQLError } from 'graphql';
-import { badRequestError, unauthorizedError } from './utils.js';
+import type { Plugin, YogaLogger } from 'graphql-yoga';
+import { type OnRequestParseEventPayload } from 'packages/graphql-yoga/src/plugins/types.js';
+import { normalizeConfig, type JwtPayload, type JwtPluginOptions } from './config.js';
+import { unauthorizedError } from './utils.js';
 
 export type JWTExtendContextFields = {
   payload: JwtPayload;
@@ -41,22 +40,6 @@ export function useJWT(options: JwtPluginOptions): Plugin<{
     return null;
   };
 
-  const getSigningKey = async (kid?: string) => {
-    for (const provider of normalizedOptions.singingKeyProviders) {
-      try {
-        const key = await provider(kid);
-
-        if (key) {
-          return key;
-        }
-      } catch (e) {
-        logger.error(`Failed to fetch signing key from signing provided:`, e);
-      }
-    }
-
-    return null;
-  };
-
   return {
     onYogaInit({ yoga }) {
       logger = yoga.logger;
@@ -76,40 +59,10 @@ export function useJWT(options: JwtPluginOptions): Plugin<{
       }
 
       try {
-        // Decode the token first, in order to get the key id to use.
-        let decodedToken: Jwt | null;
-        try {
-          decodedToken = jsonwebtoken.decode(lookupResult.token, { complete: true });
-        } catch (e) {
-          logger.warn(`Failed to decode JWT authentication token: `, e);
-          throw badRequestError(`Invalid authentication token provided`);
-        }
-
-        if (!decodedToken) {
-          logger.warn(
-            `Failed to extract payload from incoming token, please make sure the token is a valid JWT.`,
-          );
-
-          throw badRequestError(`Invalid authentication token provided`);
-        }
-
-        // Fetch the signing key based on the key id.
-        const signingKey = await getSigningKey(decodedToken?.header.kid);
-
-        if (!signingKey) {
-          logger.warn(
-            `Signing key is not available for the key id: ${decodedToken?.header.kid}. Please make sure signing key providers are configured correctly.`,
-          );
-
-          throw Error(`Authentication is not available at the moment.`);
-        }
-
         // Verify the token with the signing key.
-        const verified = await verify(
-          logger,
+        const verified = await normalizedOptions.tokenVerificationFunction(
           lookupResult.token,
-          signingKey,
-          normalizedOptions.tokenVerification,
+          logger,
         );
 
         if (!verified) {
@@ -117,16 +70,14 @@ export function useJWT(options: JwtPluginOptions): Plugin<{
           throw unauthorizedError(`Unauthenticated`);
         }
 
-        if (verified) {
-          // Link the verified payload with the request (see `onContextBuilding` for the reading part)
-          payloadByRequest.set(payload.request, {
-            payload: verified,
-            token: {
-              value: lookupResult.token,
-              prefix: lookupResult.prefix,
-            },
-          });
-        }
+        // Link the verified payload with the request (see `onContextBuilding` for the reading part)
+        payloadByRequest.set(payload.request, {
+          payload: verified,
+          token: {
+            value: lookupResult.token,
+            prefix: lookupResult.prefix,
+          },
+        });
       } catch (e) {
         // User-facing errors should be handled based on the configuration.
         // These errors are handled based on the value of "reject.invalidToken" config.
@@ -165,22 +116,4 @@ export function useJWT(options: JwtPluginOptions): Plugin<{
       }
     },
   };
-}
-
-function verify(
-  logger: YogaLogger,
-  token: string,
-  signingKey: string,
-  options: VerifyOptions | undefined,
-) {
-  return new Promise((resolve, reject) => {
-    jsonwebtoken.verify(token, signingKey, options, (err, result) => {
-      if (err) {
-        logger.warn(`Failed to verify authentication token: `, err);
-        reject(unauthorizedError('Unauthenticated'));
-      } else {
-        resolve(result as JwtPayload);
-      }
-    });
-  });
 }

@@ -1,6 +1,5 @@
 import { createGraphQLError } from 'graphql-yoga';
-import { JwksClient, type Options as JwksClientOptions } from 'jwks-rsa';
-import { GetSigningKeyFunction, type ExtractTokenFunction } from './config.js';
+import { type ExtractTokenFunction } from './config.js';
 
 export function extractFromHeader(options: {
   name: string;
@@ -95,16 +94,4 @@ export function unauthorizedError(
     },
     ...options,
   });
-}
-
-export function createInlineSigningKeyProvider(signingKey: string): GetSigningKeyFunction {
-  return () => signingKey;
-}
-
-export function createRemoteJwksSigningKeyProvider(
-  jwksClientOptions: JwksClientOptions,
-): GetSigningKeyFunction {
-  const client = new JwksClient(jwksClientOptions);
-
-  return kid => client.getSigningKey(kid)?.then(r => r.getPublicKey());
 }

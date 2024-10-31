@@ -1,8 +1,9 @@
-export { JwtPluginOptions, ExtractTokenFunction, GetSigningKeyFunction } from './config.js';
+export { ExtractTokenFunction, JwtPluginOptions } from './config.js';
 export {
-  extractFromCookie,
-  extractFromHeader,
+  GetSigningKeyFunction,
   createInlineSigningKeyProvider,
+  createJwtValidator,
   createRemoteJwksSigningKeyProvider,
-} from './utils.js';
-export { useJWT, JWTExtendContextFields } from './plugin.js';
+} from './jsonwebtoken.js';
+export { JWTExtendContextFields, useJWT } from './plugin.js';
+export { extractFromCookie, extractFromHeader } from './utils.js';
