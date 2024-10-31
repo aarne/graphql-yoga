@@ -218,6 +218,8 @@ export class YogaServer<
   private maskedErrorsOpts: YogaMaskedErrorOpts | null;
   private id: string;
 
+  readonly version = '__YOGA_VERSION__';
+
   constructor(options?: YogaServerOptions<TServerContext, TUserContext>) {
     this.id = options?.id ?? 'yoga';
 

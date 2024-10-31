@@ -1,9 +1,11 @@
 import { printSchema, stripIgnoredCharacters } from 'graphql';
 import {
   isAsyncIterable,
+  Maybe,
   Plugin,
   YogaInitialContext,
   YogaLogger,
+  YogaServer,
   type FetchAPI,
 } from 'graphql-yoga';
 import { Report } from '@apollo/usage-reporting-protobuf';
@@ -39,6 +41,18 @@ type ApolloUsageReportOptions = ApolloInlineTracePluginOptions & {
    * Defaults to GraphOS endpoint (https://usage-reporting.api.apollographql.com/api/ingress/traces)
    */
   endpoint?: string;
+  /**
+   * Agent Version to report to the usage reporting API
+   */
+  agentVersion?: string;
+  /**
+   * Client name to report to the usage reporting API
+   */
+  clientName?: StringFromRequestFn | string;
+  /**
+   * Client version to report to the usage reporting API
+   */
+  clientVersion?: StringFromRequestFn | string;
 };
 
 export interface ApolloUsageReportRequestContext extends ApolloInlineRequestTraceContext {
@@ -57,29 +71,49 @@ function getEnvVar<T>(name: string, defaultValue?: T) {
 const DEFAULT_REPORTING_ENDPOINT =
   'https://usage-reporting.api.apollographql.com/api/ingress/traces';
 
+type StringFromRequestFn = (req: Request) => Maybe<string>;
+
 export function useApolloUsageReport(options: ApolloUsageReportOptions = {}): Plugin {
   const [instrumentation, ctxForReq] = useApolloInstrumentation(options) as [
     Plugin,
     WeakMap<Request, ApolloUsageReportRequestContext>,
   ];
 
-  let logger: YogaLogger;
-  let fetchAPI: FetchAPI;
   let schemaId: string;
+  let yoga: YogaServer<Record<string, unknown>, Record<string, unknown>>;
+  const logger = Object.fromEntries(
+    (['error', 'warn', 'info', 'debug'] as const).map(level => [
+      level,
+      (...messages: unknown[]) => yoga.logger[level]('[ApolloUsageReport]', ...messages),
+    ]),
+  ) as YogaLogger;
+
+  let clientNameFactory: StringFromRequestFn = req =>
+    req.headers.get('apollographql-client-name') || 'graphql-yoga';
+
+  if (typeof options.clientName === 'string') {
+    const clientName = options.clientName;
+    clientNameFactory = () => clientName;
+  } else if (typeof options.clientName === 'function') {
+    clientNameFactory = options.clientName;
+  }
+
+  let clientVersionFactory: StringFromRequestFn = req =>
+    req.headers.get('apollographql-client-version') || yoga.version;
+
+  if (typeof options.clientVersion === 'string') {
+    const clientVersion = options.clientVersion;
+    clientVersionFactory = () => clientVersion;
+  } else if (typeof options.clientVersion === 'function') {
+    clientVersionFactory = options.clientVersion;
+  }
 
   return {
     onPluginInit({ addPlugin }) {
       addPlugin(instrumentation);
       addPlugin({
         onYogaInit(args) {
-          fetchAPI = args.yoga.fetchAPI;
-          logger = Object.fromEntries(
-            (['error', 'warn', 'info', 'debug'] as const).map(level => [
-              level,
-              (...messages: unknown[]) =>
-                args.yoga.logger[level]('[ApolloUsageReport]', ...messages),
-            ]),
-          ) as YogaLogger;
+          yoga = args.yoga;
 
           if (!getEnvVar('APOLLO_KEY', options.apiKey)) {
             throw new Error(
@@ -134,10 +168,22 @@ export function useApolloUsageReport(options: ApolloUsageReportOptions = {}): Pl
           // Each operation in a batched request can belongs to a different schema.
           // Apollo doesn't allow to send batch queries for multiple schemas in the same batch
           const tracesPerSchema: Record<string, Report['tracesPerQuery']> = {};
+
           for (const trace of reqCtx.traces.values()) {
             if (!trace.schemaId || !trace.operationKey) {
               throw new TypeError('Misformed trace, missing operation key or schema id');
             }
+
+            const clientName = clientNameFactory(request);
+            if (clientName) {
+              trace.trace.clientName = clientName;
+            }
+
+            const clientVersion = clientVersionFactory(request);
+            if (clientVersion) {
+              trace.trace.clientVersion = clientVersion;
+            }
+
             tracesPerSchema[trace.schemaId] ||= {};
             tracesPerSchema[trace.schemaId][trace.operationKey] ||= { trace: [] };
             tracesPerSchema[trace.schemaId][trace.operationKey].trace?.push(trace.trace);
@@ -145,7 +191,17 @@ export function useApolloUsageReport(options: ApolloUsageReportOptions = {}): Pl
 
           for (const schemaId in tracesPerSchema) {
             const tracesPerQuery = tracesPerSchema[schemaId];
-            serverContext.waitUntil(sendTrace(options, logger, fetchAPI, schemaId, tracesPerQuery));
+            const agentVersion = options.agentVersion || `graphql-yoga@${yoga.version}`;
+            serverContext.waitUntil(
+              sendTrace(
+                options,
+                logger,
+                yoga.fetchAPI.fetch,
+                schemaId,
+                tracesPerQuery,
+                agentVersion,
+              ),
+            );
           }
         },
       });
@@ -174,9 +230,10 @@ export async function hashSHA256(
 async function sendTrace(
   options: ApolloUsageReportOptions,
   logger: YogaLogger,
-  { fetch }: FetchAPI,
+  fetch: FetchAPI['fetch'],
   schemaId: string,
   tracesPerQuery: Report['tracesPerQuery'],
+  agentVersion: string,
 ) {
   const {
     graphRef = getEnvVar('APOLLO_GRAPH_REF'),
@@ -187,6 +244,7 @@ async function sendTrace(
   try {
     const body = Report.encode({
       header: {
+        agentVersion,
         graphRef,
         executableSchemaId: schemaId,
       },
@@ -204,10 +262,11 @@ async function sendTrace(
       },
       body,
     });
+    const responseText = await response.text();
     if (response.ok) {
-      logger.debug('Traces sent:', await response.text());
+      logger.debug('Traces sent:', responseText);
     } else {
-      logger.error('Failed to send trace:', await response.text());
+      logger.error('Failed to send trace:', responseText);
     }
   } catch (err) {
     logger.error('Failed to send trace:', err);
