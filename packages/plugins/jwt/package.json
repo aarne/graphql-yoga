@@ -30,6 +30,10 @@
         "default": "./dist/esm/index.js"
       }
     },
+    "./jsonwebtoken": {
+      "types": "./dist/typings/jsonwebtoken.d.ts",
+      "default": "./dist/esm/jsonwebtoken.js"
+    },
     "./package.json": "./package.json"
   },
   "typings": "dist/typings/index.d.ts",
