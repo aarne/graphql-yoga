@@ -1,5 +1,6 @@
 import { type PromiseOrValue } from 'graphql-yoga';
-import { VerifyOptions } from 'jsonwebtoken';
+import { type JwtPayload, type VerifyOptions } from 'jsonwebtoken';
+import { createVerifyTokenFunction, decodeHeader } from './jsonwebtoken.js';
 import { extractFromHeader } from './utils.js';
 
 type AtleastOneItem<T> = [T, ...T[]];
@@ -46,7 +47,13 @@ export type JwtPluginOptions = {
    *
    * By defualt, only the `RS256` and `HS256` algorithms are configured as validations.
    */
-  tokenVerification?: VerifyOptions;
+  tokenVerification?:
+    | VerifyOptions
+    | ((token: string, signingKey: string) => PromiseOrValue<JwtPayload>);
+  /**
+   * Function to decode the token header.
+   */
+  decodeTokenHeader?: (token: string) => { kid?: string } | undefined;
   /**
    * Whether to reject requests/operations that does not meet criteria.
    *
@@ -113,5 +120,10 @@ export function normalizeConfig(input: JwtPluginOptions) {
       ...input.reject,
     },
     extendContextFieldName,
+    decodeHeader: input.decodeTokenHeader ?? decodeHeader,
+    verifyToken:
+      typeof input.tokenVerification === 'function'
+        ? input.tokenVerification
+        : createVerifyTokenFunction(input.tokenVerification),
   };
 }

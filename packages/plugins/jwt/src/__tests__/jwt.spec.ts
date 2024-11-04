@@ -2,6 +2,7 @@
 import { createHmac } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createSchema, createYoga, Plugin } from 'graphql-yoga';
+import { decodeProtectedHeader, jwtVerify } from 'jose';
 import jwt, { Algorithm, SignOptions } from 'jsonwebtoken';
 import { useCookies } from '@whatwg-node/server-plugin-cookies';
 import { JwtPluginOptions } from '../config';
@@ -330,6 +331,42 @@ describe('jwt plugin', () => {
     const secret = 'topsecret';
     const test = createTestServer({
       singingKeyProviders: [createInlineSigningKeyProvider(secret)],
+    });
+    const token = buildJWT({ sub: '123' }, { key: secret });
+    const response = await test.queryWithAuth(token);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      data: {
+        ctx: {
+          jwt: {
+            payload: {
+              sub: '123',
+            },
+            token: {
+              prefix: 'Bearer',
+              value: expect.any(String),
+            },
+          },
+        },
+      },
+    });
+  });
+
+  test('auth is passing when token is valid (HS256) - jose', async () => {
+    const secret = 'topsecret';
+    const test = createTestServer({
+      singingKeyProviders: [createInlineSigningKeyProvider(secret)],
+      decodeTokenHeader: token => {
+        const header = decodeProtectedHeader(token);
+        return {
+          kid: header.kid,
+        };
+      },
+      async tokenVerification(token, signingKey) {
+        const secret = new TextEncoder().encode(signingKey);
+        const payload = await jwtVerify(token, secret);
+        return payload.payload;
+      },
     });
     const token = buildJWT({ sub: '123' }, { key: secret });
     const response = await test.queryWithAuth(token);

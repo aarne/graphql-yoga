@@ -1,9 +1,9 @@
-import type { Plugin, YogaLogger } from 'graphql-yoga';
-import jsonwebtoken, { type Jwt, type JwtPayload, type VerifyOptions } from 'jsonwebtoken';
-import { type OnRequestParseEventPayload } from 'packages/graphql-yoga/src/plugins/types.js';
-import { normalizeConfig, type JwtPluginOptions } from './config.js';
 import '@whatwg-node/server-plugin-cookies';
 import { GraphQLError } from 'graphql';
+import type { Plugin, YogaLogger } from 'graphql-yoga';
+import { type JwtPayload } from 'jsonwebtoken';
+import { type OnRequestParseEventPayload } from 'packages/graphql-yoga/src/plugins/types.js';
+import { normalizeConfig, type JwtPluginOptions } from './config.js';
 import { badRequestError, unauthorizedError } from './utils.js';
 
 export type JWTExtendContextFields = {
@@ -77,9 +77,9 @@ export function useJWT(options: JwtPluginOptions): Plugin<{
 
       try {
         // Decode the token first, in order to get the key id to use.
-        let decodedToken: Jwt | null;
+        let decodedToken: { kid?: string } | undefined | null;
         try {
-          decodedToken = jsonwebtoken.decode(lookupResult.token, { complete: true });
+          decodedToken = normalizedOptions.decodeHeader(lookupResult.token);
         } catch (e) {
           logger.warn(`Failed to decode JWT authentication token: `, e);
           throw badRequestError(`Invalid authentication token provided`);
@@ -94,23 +94,18 @@ export function useJWT(options: JwtPluginOptions): Plugin<{
         }
 
         // Fetch the signing key based on the key id.
-        const signingKey = await getSigningKey(decodedToken?.header.kid);
+        const signingKey = await getSigningKey(decodedToken?.kid);
 
         if (!signingKey) {
           logger.warn(
-            `Signing key is not available for the key id: ${decodedToken?.header.kid}. Please make sure signing key providers are configured correctly.`,
+            `Signing key is not available for the key id: ${decodedToken?.kid}. Please make sure signing key providers are configured correctly.`,
           );
 
           throw Error(`Authentication is not available at the moment.`);
         }
 
         // Verify the token with the signing key.
-        const verified = await verify(
-          logger,
-          lookupResult.token,
-          signingKey,
-          normalizedOptions.tokenVerification,
-        );
+        const verified = await normalizedOptions.verifyToken(lookupResult.token, signingKey);
 
         if (!verified) {
           logger.debug(`Token failed to verify, JWT plugin failed to authenticate.`);
@@ -165,22 +160,4 @@ export function useJWT(options: JwtPluginOptions): Plugin<{
       }
     },
   };
-}
-
-function verify(
-  logger: YogaLogger,
-  token: string,
-  signingKey: string,
-  options: VerifyOptions | undefined,
-) {
-  return new Promise((resolve, reject) => {
-    jsonwebtoken.verify(token, signingKey, options, (err, result) => {
-      if (err) {
-        logger.warn(`Failed to verify authentication token: `, err);
-        reject(unauthorizedError('Unauthenticated'));
-      } else {
-        resolve(result as JwtPayload);
-      }
-    });
-  });
 }

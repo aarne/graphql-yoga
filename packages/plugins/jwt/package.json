@@ -50,7 +50,8 @@
     "@types/jsonwebtoken": "^9.0.0",
     "graphql": "^16.5.0",
     "graphql-scalars": "^1.22.2",
-    "graphql-yoga": "workspace:*"
+    "graphql-yoga": "workspace:*",
+    "jose": "^5.9.6"
   },
   "publishConfig": {
     "directory": "dist",
